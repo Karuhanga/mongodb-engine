@@ -13,6 +13,14 @@ def runtests(foo, settings='settings', extra=[], test_builtin=False):
     if not test_builtin:
         apps = filter(lambda name: not name.startswith('django.contrib.'),
                       apps)
+
+    # we're not running this particular dependency's tests for now
+    # because of some failures we can't remedy since it is an external dependency
+    djangotoolbox = 'djangotoolbox'
+    if djangotoolbox in apps:
+        apps = list(apps)
+        apps.remove(djangotoolbox)
+
     # pre-1.6 test runners don't understand full module names
     import django
     if django.VERSION < (1, 6):
