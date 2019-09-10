@@ -474,6 +474,12 @@ class OrLookupsTests(TestCase):
             ['Hello', 'Goodbye', 'Hello and goodbye'],
             attrgetter('headline'), ordered=False)
 
+        self.assertQuerysetEqual(
+            Article.objects.filter(Q(headline='Hello') |
+                                   Q(headline__in=['Goodbye'])),
+            ['Hello', 'Goodbye'],
+            attrgetter('headline'), ordered=False)
+
     def test_stages(self):
         # You can shorten this syntax with code like the following,
         # which is especially useful if building the query in stages:
@@ -612,3 +618,92 @@ class OrLookupsTests(TestCase):
             Article.objects.filter(Q(headline__startswith='Hello'))
                            .in_bulk([self.a1, self.a2]),
             {self.a1: Article.objects.get(pk=self.a1)})
+
+
+class IntegrationQueryTests(TestCase):
+    def setUp(self):
+        Article.objects.all().delete()
+
+        self.a1 = Article.objects.create(
+            headline='Hello', pub_date=datetime.datetime(2005, 11, 27)).pk
+        self.a2 = Article.objects.create(
+            headline='Goodbye', pub_date=datetime.datetime(2005, 11, 28)).pk
+        self.a3 = Article.objects.create(
+            headline='Hello and goodbye',
+            pub_date=datetime.datetime(2005, 11, 29)).pk
+
+        Person.objects.all().delete()
+
+        self.p1 = Person.objects.create(
+            name="Mary",
+            surname="MarySurname",
+            age=1,
+            another_age=2,
+        )
+        self.p2 = Person.objects.create(
+            name="Jane",
+            surname="JaneSurname",
+            age=1,
+            another_age=3,
+        )
+        self.p3 = Person.objects.create(
+            name="John",
+            surname="JohnSurname",
+            age=4,
+            another_age=2,
+        )
+        self.p4 = Person.objects.create(
+            name="Peter",
+            surname="PeterSurname",
+            age=4,
+            another_age=3,
+        )
+        self.p4 = Person.objects.create(
+            name="Paul",
+            surname="PaulSurname",
+            age=4,
+            another_age=5,
+        )
+
+        self.qs_goodbye = Article.objects.filter(headline='Goodbye')
+        self.qs_hello = Article.objects.filter(headline='Hello')
+        self.qs_hello_and_goodbye = Article.objects.filter(headline='Hello and goodbye')
+        self.qs_hello_goodbye = Article.objects.filter(headline__in=['Hello', 'Goodbye'])
+        self.qs_goodbye_hello_and_goodbye = Article.objects.filter(headline__in=['Goodbye', 'Hello and goodbye'])
+
+        self.qs_age_4 = Person.objects.filter(age=4)
+
+    def tearDown(self):
+        Article.objects.all().delete()
+        Person.objects.all().delete()
+
+    def test_multiple_ands(self):
+        qs = self.qs_hello_and_goodbye.filter(headline__startswith='Hello')
+        self.assertQuerysetEqual(qs, ['Hello and goodbye'], attrgetter('headline'), ordered=False)
+
+        qs = self.qs_hello_goodbye.filter(headline='Goodbye') & self.qs_goodbye_hello_and_goodbye.filter(headline='Goodbye')
+        self.assertQuerysetEqual(qs, ['Goodbye'], attrgetter('headline'), ordered=False)
+
+    def test_multiple_and_and_ors(self):
+        qs_1_or_2 = self.qs_goodbye | self.qs_hello
+        qs = qs_1_or_2.filter(headline__startswith="Hello")
+        self.assertQuerysetEqual(qs, ['Hello'], attrgetter('headline'), ordered=False)
+
+        qs = self.qs_hello_goodbye.filter(headline='Hello') | self.qs_goodbye_hello_and_goodbye.filter(headline='Goodbye')
+        self.assertQuerysetEqual(qs, ['Hello', 'Goodbye'], attrgetter('headline'), ordered=False)
+
+        qs = self.qs_hello_goodbye.filter(Q(headline='Hello') | Q(headline='Goodbye'))
+        self.assertQuerysetEqual(qs, ['Hello', 'Goodbye'], attrgetter('headline'), ordered=False)
+
+    def test_nested_and_and_ors(self):  # replicates https://github.com/django-nonrel/mongodb-engine/issues/238
+        # lazily building the queryset works
+        q_age_3 = Q(another_age=3)
+        qs = self.qs_age_4.filter(Q(another_age=2) | Q(another_age=5) | q_age_3)
+        self.assertQuerysetEqual(qs, [4, 4, 4], attrgetter('age'), ordered=False)
+        self.assertQuerysetEqual(qs, [2, 3, 5], attrgetter('another_age'), ordered=False)
+
+        # greedily building the queryset does not work
+        qs = self.qs_age_4.filter(Q(another_age=2) | Q(another_age=5))
+        qs = self.qs_age_4.filter(another_age=3) | qs
+        self.assertQuerysetEqual(qs, [4, 4, 4], attrgetter('age'), ordered=False)
+        self.assertQuerysetEqual(qs, [2, 3, 5], attrgetter('another_age'), ordered=False)
